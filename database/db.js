@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 
 // Use Render persistent storage (production) OR local file (development)
-const dbPath = process.env.DB_PATH || path.join(__dirname, "inventory.db");
+const dbPath = process.env.DB_PATH ||  "/opt/render/data/inventory.db";
 
 // Ensure directory exists
 const folder = path.dirname(dbPath);
