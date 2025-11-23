@@ -4,6 +4,7 @@ const multer = require("multer");
 const upload = multer({ dest: "uploads/" });
 const productController = require("../controllers/productController");
 
+
 // Static routes first
 router.get("/export", productController.exportCSV);
 router.get("/search", productController.searchProducts);

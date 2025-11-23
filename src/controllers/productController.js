@@ -1,4 +1,4 @@
-const { db, run, get, all } = require("../database/db");
+const { db, run, get, all } = require("../../database/db");
 const fs = require("fs");
 const csv = require("csv-parser");
 const { Parser } = require("json2csv");
