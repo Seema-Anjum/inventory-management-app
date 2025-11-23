@@ -1,0 +1,4 @@
+name,unit,category,brand,stock,status,image
+AA Battery,pcs,Batteries,Duracell,120,in_stock,https://example.com/aa.jpg
+USB-C Cable,pcs,Cables,Anker,50,in_stock,https://example.com/usb.jpg
+Old Item,pcs,Legacy,BrandX,0,out_of_stock,
