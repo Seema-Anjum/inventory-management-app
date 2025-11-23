@@ -2,11 +2,12 @@ const express = require("express");
 const cors = require("cors");
 const productRoutes = require("./src/routes/productRoutes");
 
+// Initialize DB & tables
+require("./database/initDb"); 
+
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-
 app.use("/api/products", productRoutes);
 
 const PORT = process.env.PORT || 10000;
