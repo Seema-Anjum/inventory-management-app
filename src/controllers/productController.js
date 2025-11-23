@@ -1,140 +1,133 @@
-const fs = require('fs');
-const path = require('path');
-const Product = require('../models/productModel');
-const History = require('../models/historyModel');
-const { parseCsvFile, streamCsvToResponse } = require('../utils/csvUtils');
+const { db, run, get, all } = require("../utils/db");
+const csv = require("csv-parser");
+const fs = require("fs");
 
-// GET /api/products
-async function getProducts(req, res, next) {
+// Get all products
+exports.getProducts = async (req, res) => {
   try {
-    const { page, limit, sortBy, order, search } = req.query;
-    const rows = await Product.getAll({ page, limit, sortBy, order, search });
-    res.json(rows);
-  } catch (err) { next(err); }
-}
+    const products = await all("SELECT * FROM products");
+    res.json(products);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
 
-// GET /api/products/search?name=...
-async function searchProducts(req, res, next) {
+// Create product
+exports.createProduct = async (req, res) => {
   try {
-    const q = req.query.name || req.query.q || '';
-    if (!q) return getProducts(req, res, next);
-    const rows = await Product.getAll({ search: q });
-    res.json(rows);
-  } catch (err) { next(err); }
-}
+    const { name, category, brand, stock, status } = req.body;
+    const result = await run(
+      "INSERT INTO products (name, category, brand, stock, status) VALUES (?, ?, ?, ?, ?)",
+      [name, category, brand, stock, status]
+    );
+    res.status(201).json({ id: result.lastID, message: "Product created" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
 
-// PUT /api/products/:id
-async function updateProduct(req, res, next) {
+// Update product
+exports.updateProduct = async (req, res) => {
   try {
-    const id = Number(req.params.id);
-    const { name, unit, category, brand, stock, status, image, changedBy } = req.body;
+    const { id } = req.params;
+    const { name, category, brand, stock, status } = req.body;
 
-    const existing = await Product.findByNameExcludingId(name, id);
-    if (existing) return res.status(400).json({ error: 'Name already exists' });
+    const old = await get("SELECT stock FROM products WHERE id = ?", [id]);
+    await run(
+      "UPDATE products SET name=?, category=?, brand=?, stock=?, status=? WHERE id=?",
+      [name, category, brand, stock, status, id]
+    );
 
-    const old = await Product.getById(id);
-    if (!old) return res.status(404).json({ error: 'Product not found' });
-
-    // Update product
-    await Product.update(id, { name, unit, category, brand, stock, status, image });
-
-    // Log inventory change if stock changed
-    if (Number(old.stock) !== Number(stock)) {
-      await History.createLog(id, old.stock, stock, changedBy || 'admin');
+    // Track inventory history
+    if (old && old.stock !== stock) {
+      await run(
+        "INSERT INTO inventory_history (product_id, old_quantity, new_quantity, changed_by, change_date) VALUES (?, ?, ?, ?, ?)",
+        [id, old.stock, stock, "admin", new Date().toISOString()]
+      );
     }
 
-    const updated = await Product.getById(id);
-    res.json(updated);
-  } catch (err) { next(err); }
-}
+    res.json({ message: "Product updated" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
 
-// DELETE /api/products/:id
-async function deleteProduct(req, res, next) {
+// Delete product
+exports.deleteProduct = async (req, res) => {
   try {
-    const id = Number(req.params.id);
-    await Product.remove(id);
-    res.json({ success: true });
-  } catch (err) { next(err); }
-}
+    const { id } = req.params;
+    await run("DELETE FROM products WHERE id=?", [id]);
+    res.json({ message: "Product deleted" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
 
-// POST /api/products/import
-async function importCSV(req, res, next) {
+// Search products
+exports.searchProducts = async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'csvFile required' });
-    const filePath = req.file.path;
-    const rows = await parseCsvFile(filePath);
+    const { name } = req.query;
+    const products = await all("SELECT * FROM products WHERE LOWER(name) LIKE ?", [`%${name.toLowerCase()}%`]);
+    res.json(products);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
 
+// Get product history
+exports.getHistory = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const logs = await all("SELECT * FROM inventory_history WHERE product_id=? ORDER BY change_date DESC", [id]);
+    res.json(logs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Export CSV
+exports.exportCSV = async (req, res) => {
+  try {
+    const products = await all("SELECT * FROM products");
+    const headers = "id,name,category,brand,stock,status\n";
+    const csvData = products.map(p => `${p.id},${p.name},${p.category},${p.brand},${p.stock},${p.status}`).join("\n");
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", "attachment; filename=products.csv");
+    res.send(headers + csvData);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Import CSV
+exports.importCSV = async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: "No file uploaded" });
+
+    const results = [];
     const added = [];
     const skipped = [];
-    const duplicates = [];
 
-    for (const r of rows) {
-      const name = (r.name || '').trim();
-      if (!name) { skipped.push({ row: r, reason: 'missing name' }); continue; }
-
-      const exists = await Product.findByName(name);
-      if (exists) {
-        duplicates.push({ name, existingId: exists.id });
-        continue;
-      }
-
-      try {
-        await Product.create({
-          name,
-          unit: r.unit || 'pcs',
-          category: r.category || 'uncategorized',
-          brand: r.brand || '',
-          stock: Number(r.stock || 0),
-          image: r.image || ''
-        });
-        added.push(name);
-      } catch (e) {
-        skipped.push({ row: r, reason: e.message });
-      }
-    }
-
-    // Cleanup uploaded file
-    try { fs.unlinkSync(filePath); } catch(e){ /* ignore */ }
-
-    res.json({ added: added.length, skipped: skipped.length, duplicates });
-  } catch (err) { next(err); }
-}
-
-// GET /api/products/export
-async function exportCSV(req, res, next) {
-  try {
-    const rows = await Product.getAll({});
-    // Map rows to CSV-friendly objects
-    const csvRows = rows.map(r => ({
-      id: r.id,
-      name: r.name,
-      unit: r.unit,
-      category: r.category,
-      brand: r.brand,
-      stock: r.stock,
-      status: r.status,
-      image: r.image
-    }));
-    const headers = ['id','name','unit','category','brand','stock','status','image'];
-    streamCsvToResponse(csvRows, res, headers);
-  } catch (err) { next(err); }
-}
-
-// GET /api/products/:id/history
-async function getHistory(req, res, next) {
-  try {
-    const id = Number(req.params.id);
-    const rows = await History.getByProductId(id);
-    res.json(rows);
-  } catch (err) { next(err); }
-}
-
-module.exports = {
-  getProducts,
-  searchProducts,
-  updateProduct,
-  deleteProduct,
-  importCSV,
-  exportCSV,
-  getHistory
+    fs.createReadStream(file.path)
+      .pipe(csv())
+      .on("data", (row) => results.push(row))
+      .on("end", async () => {
+        for (const p of results) {
+          const exists = await get("SELECT id FROM products WHERE name=?", [p.name]);
+          if (exists) skipped.push({ name: p.name, existingId: exists.id });
+          else {
+            await run(
+              "INSERT INTO products (name, category, brand, stock, status) VALUES (?, ?, ?, ?, ?)",
+              [p.name, p.category, p.brand, p.stock, p.status]
+            );
+            added.push(p.name);
+          }
+        }
+        fs.unlinkSync(file.path);
+        res.json({ added: added.length, skipped });
+      });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 };
