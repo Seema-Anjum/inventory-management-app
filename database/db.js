@@ -1,17 +1,25 @@
 const sqlite3 = require("sqlite3").verbose();
+const fs = require("fs");
 const path = require("path");
 
-let dbPath;
+// Use Render persistent storage or local path
+const dbPath = process.env.DB_PATH || path.join(__dirname, "../database/inventory.db");
 
-// If running on Render → use persistent disk
-if (process.env.RENDER) {
-  dbPath = path.join("/opt/render/project/src/data", "inventory.db");
-} else {
-  // Local development
-  dbPath = path.join(__dirname, "inventory.db");
+// Ensure folder exists
+const folder = path.dirname(dbPath);
+if (!fs.existsSync(folder)) {
+  fs.mkdirSync(folder, { recursive: true });
+  console.log("Created DB folder:", folder);
 }
 
-const db = new sqlite3.Database(dbPath);
+// Create SQLite instance
+const db = new sqlite3.Database(dbPath, (err) => {
+  if (err) {
+    console.error("DB Error:", err);
+  } else {
+    console.log("SQLite connected at:", dbPath);
+  }
+});
 
 // --- Promisified helpers ---
 function run(sql, params = []) {
@@ -41,4 +49,4 @@ function all(sql, params = []) {
   });
 }
 
-module.exports = { run, get, all, db };
+module.exports = { db, run, get, all };
